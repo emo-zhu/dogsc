@@ -123,6 +123,11 @@ extension EditorTimelineView {
                 points += [clip.timing.startTime, clip.timing.endTime]
             }
         }
+        if showsSubtitleTimeline {
+            for cue in timeline.subtitleCues where !excluded.contains(cue.id) {
+                points += [cue.timing.startTime, cue.timing.endTime]
+            }
+        }
         if gestureOwnership.activeIntent != .scrub { points.append(playbackTime) }
         return points.filter { $0 >= 0 && $0 <= duration }
     }

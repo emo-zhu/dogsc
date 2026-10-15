@@ -19,6 +19,7 @@ struct AppLineIcon: View {
         case pin, speed, drop, halfCircle, bookmark, swap, speakerOff, cameraOff
         case search, noSymbol, chevronLeft, chevronUp, noFrame, portrait, arrowRight
         case arrowUpLeft, arrowDownRight, deleteLeft, deleteRight, list, presets
+        case subtitle
     }
 
     let kind: Kind
@@ -344,6 +345,9 @@ struct AppLineIcon: View {
                 for y in [CGFloat(7), 11] {
                     line([(2, y), (5.5, y)]); line([(12.5, y), (16, y)])
                 }
+            case .subtitle:
+                rounded(2, 3.5, 14, 11, 2.5)
+                line([(5, 8), (13, 8)]); line([(5, 11), (11, 11)])
             }
             return p.applying(CGAffineTransform(scaleX: rect.width / 18, y: rect.height / 18)
                 .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.minY)))

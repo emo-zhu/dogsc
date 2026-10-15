@@ -49,8 +49,8 @@ struct RecorderSetupSurface: View {
         .firstUseTour(.recorder, enabled: model.phase == .setup && !model.showsRequiredPermissionGate)
     }
 
-    /// One mode at a time. Scrolling, the arrow keys or a click roll to the
-    /// next; the island stretches to whatever name is showing.
+    /// One mode at a time. Scrolling or the arrow keys roll to the next, a
+    /// click opens the picker; the island stretches to whatever name is showing.
     private var wheel: some View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
@@ -70,9 +70,42 @@ struct RecorderSetupSurface: View {
         .background(RecorderStyle.well, in: Capsule())
         .clipShape(Capsule())
         .overlay {
-            RecorderModeWheelInput(label: appLocalized(Self.label(for: mode))) { step in roll(step) }
+            RecorderModeWheelInput(label: appLocalized(Self.label(for: mode)), onPick: { anchor in
+                RecorderPopoverPresenter.shared.toggle(
+                    id: "recorder.source",
+                    anchor: anchor,
+                    content: AnyView(sourcePicker),
+                    width: 150
+                )
+            }, onStep: { step in roll(step) })
         }
         .help(appLocalized(Self.label(for: mode)))
+    }
+
+    /// One row per source, so any source is a single click away. Scrolling and
+    /// the arrow keys keep the wheel rolling for the muscle-memory path.
+    private var sourcePicker: some View {
+        RecorderPopoverSurface(width: 150) {
+            VStack(spacing: 2) {
+                ForEach(CaptureSource.allCases, id: \.self) { source in
+                    RecorderChoiceRow(
+                        title: Self.label(for: source),
+                        selected: source == mode
+                    ) { select(source) }
+                }
+            }
+        }
+    }
+
+    /// Jump straight to the picked source; direction only picks which way the
+    /// label slides, matching the roll animation.
+    private func select(_ source: CaptureSource) {
+        guard source != mode else { return }
+        let all = CaptureSource.allCases
+        guard let from = all.firstIndex(of: mode), let to = all.firstIndex(of: source) else { return }
+        rollsForward = to > from
+        RecorderPopoverPresenter.shared.dismiss()
+        withAnimation(RecorderMotion.settle) { storedMode = source.rawValue }
     }
 
     private var recordButton: some View {
@@ -148,23 +181,28 @@ private struct RecorderModeShape: Shape {
     }
 }
 
-/// The wheel's input surface: scroll to roll either way, click or press the
-/// arrow keys to step. One AppKit view so the first click lands even while
-/// another app is frontmost.
+/// The wheel's input surface: scroll to roll either way, click to open the
+/// source picker, arrow keys to step. One AppKit view so the first click lands
+/// even while another app is frontmost.
 private struct RecorderModeWheelInput: NSViewRepresentable {
     @Environment(\.locale) private var locale
     let label: String
+    /// A click opens the source picker instead of rolling one step, so any
+    /// source is one click away; scrolling and the arrow keys still roll.
+    let onPick: (NSView) -> Void
     let onStep: (Int) -> Void
 
     func makeNSView(context: Context) -> WheelView { WheelView() }
     func updateNSView(_ view: WheelView, context: Context) {
         _ = locale
+        view.onPick = onPick
         view.onStep = onStep
-        view.setAccessibilityLabel(appLocalized("开始录制"))
+        view.setAccessibilityLabel(appLocalized("录制源"))
         view.setAccessibilityValue(label)
     }
 
     final class WheelView: NSView {
+        var onPick: (NSView) -> Void = { _ in }
         var onStep: (Int) -> Void = { _ in }
         private var travel: CGFloat = 0
 
@@ -178,7 +216,7 @@ private struct RecorderModeWheelInput: NSViewRepresentable {
         override var acceptsFirstResponder: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override var mouseDownCanMoveWindow: Bool { false }
-        override func mouseDown(with event: NSEvent) { onStep(1) }
+        override func mouseDown(with event: NSEvent) { onPick(self) }
 
         override func scrollWheel(with event: NSEvent) {
             // A trackpad reports many small deltas; a mouse wheel reports lines.

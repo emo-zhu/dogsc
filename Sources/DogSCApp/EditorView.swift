@@ -25,6 +25,7 @@ enum EditorInspectorRouting {
         case .cursor: return .cursor
         case .camera, .cameraMotion: return .camera
         case .audio: return .audio
+        case .subtitleCue: return .subtitle
         }
     }
 
@@ -42,6 +43,12 @@ enum EditorInspectorRouting {
         guard let current else { return nil }
         if selection == .canvas,
            current == .opening {
+            return current
+        }
+        // The subtitle page spans the whole timeline and owns no object of its
+        // own, so clearing a caption selection must not close it.
+        if (selection == .canvas || selection == nil),
+           current == .subtitle {
             return current
         }
         return tab(for: selection) == current ? current : nil
@@ -283,6 +290,14 @@ struct EditorView: View {
                     selection,
                     current: explicitInspectorTab
                 )
+        }
+        .onChange(of: editorStore.project.timeline.subtitleCues.isEmpty) { _, isEmpty in
+            // Captions own their timeline lane, so generating or importing
+            // them must reveal that lane. The user can still hide it again
+            // from the track menu afterwards.
+            guard !isEmpty else { return }
+            timelineTrackVisibilityBinding.wrappedValue =
+                timelineTrackVisibility.union(.subtitles)
         }
         .background {
             EditorWindowLifecycleBridge(
@@ -539,6 +554,10 @@ struct EditorView: View {
                 // per-segment volume control to edit.
                 if case .primarySegment = editorStore.selection { break }
                 editorStore.selection = .audio(sourceHasAudio ? .system : .microphone)
+            case .subtitle:
+                // The subtitle page edits the whole timeline; any kept object
+                // selection is irrelevant to it.
+                break
             }
         }
     }
@@ -563,6 +582,8 @@ struct EditorView: View {
         case .mosaic where !visibility.contains(.mosaic):
             fallback = .canvas
         case .sticker where !visibility.contains(.sticker):
+            fallback = .canvas
+        case .subtitleCue where !visibility.contains(.subtitles):
             fallback = .canvas
         default:
             fallback = nil

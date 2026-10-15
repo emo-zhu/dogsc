@@ -249,6 +249,7 @@ public struct ProjectTimeline: Codable, Equatable, Sendable {
     public var cameraMotionClips: [CameraMotionClip]
     public var mosaicClips: [MosaicClip]
     public var stickerClips: [StickerClip]
+    public var subtitleCues: [SubtitleCue]
 
     public init(
         sourceSequence: SourceSequence = .fullRecording,
@@ -257,7 +258,8 @@ public struct ProjectTimeline: Codable, Equatable, Sendable {
         screenMotionClips: [ScreenMotionClip] = [],
         cameraMotionClips: [CameraMotionClip] = [],
         mosaicClips: [MosaicClip] = [],
-        stickerClips: [StickerClip] = []
+        stickerClips: [StickerClip] = [],
+        subtitleCues: [SubtitleCue] = []
     ) {
         self.sourceSequence = sourceSequence
         self.primarySegmentAudioOverrides = primarySegmentAudioOverrides
@@ -266,6 +268,7 @@ public struct ProjectTimeline: Codable, Equatable, Sendable {
         self.cameraMotionClips = cameraMotionClips
         self.mosaicClips = mosaicClips
         self.stickerClips = stickerClips
+        self.subtitleCues = subtitleCues
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -276,6 +279,7 @@ public struct ProjectTimeline: Codable, Equatable, Sendable {
         case cameraMotionClips
         case mosaicClips
         case stickerClips
+        case subtitleCues
     }
 
     public init(from decoder: any Decoder) throws {
@@ -307,6 +311,10 @@ public struct ProjectTimeline: Codable, Equatable, Sendable {
         stickerClips = try container.decodeIfPresent(
             [StickerClip].self,
             forKey: .stickerClips
+        ) ?? []
+        subtitleCues = try container.decodeIfPresent(
+            [SubtitleCue].self,
+            forKey: .subtitleCues
         ) ?? []
     }
 }

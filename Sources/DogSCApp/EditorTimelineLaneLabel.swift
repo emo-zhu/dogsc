@@ -65,6 +65,7 @@ extension EditorTimelineView {
             + (showsScreenMotionTimeline ? [motionTimelineHeight] : [])
             + (showsCameraMotionTimeline ? [motionTimelineHeight] : [])
             + (showsOverlayTimeline ? [overlayTimelineHeight] : [])
+            + (showsSubtitleTimeline ? [subtitleTimelineHeight] : [])
         _ = rowHeights
         // Row lines are drawn by the rows themselves (timelineRowDivider), so
         // they move with a lane that is being shown or hidden instead of

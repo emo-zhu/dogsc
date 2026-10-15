@@ -123,6 +123,24 @@ public extension ProjectTimelineEditing {
             )
             return edited
         }
+        result.subtitleCues = timeline.subtitleCues.map { cue in
+            var edited = cue
+            edited.timing = transform.map(cue.timing)
+            // Word offsets are cue-relative, so they survive every shift and
+            // trim untouched. A rate change stretches the cue, and the words
+            // have to stretch with it or the highlight would lag the voice.
+            if !edited.words.isEmpty, cue.timing.duration > 0 {
+                let ratio = edited.timing.duration / cue.timing.duration
+                if ratio != 1 {
+                    edited.words = edited.words.map { word in
+                        var scaled = word
+                        scaled.offset *= ratio
+                        return scaled
+                    }
+                }
+            }
+            return edited
+        }
         sortZoom(&result.zoomClips)
         sortScreenMotion(&result.screenMotionClips)
         sortCameraMotion(&result.cameraMotionClips)

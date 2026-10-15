@@ -35,6 +35,7 @@ enum EditorSelection: Equatable, Hashable, Sendable {
     case audio(EditorAudioTrack)
     case mosaic(UUID)
     case sticker(UUID)
+    case subtitleCue(UUID)
 }
 
 enum EditorTool: String, CaseIterable, Codable, Sendable {
@@ -61,10 +62,11 @@ enum EditorInteractionCommandScope: Equatable, Hashable, Sendable {
     case audio
     case cursor
     case motion
+    case subtitle
 
     var fallbackSelection: EditorSelection {
         switch self {
-        case .selection, .project, .canvas: return .canvas
+        case .selection, .project, .canvas, .subtitle: return .canvas
         case .camera: return .camera
         case .audio: return .audio(.system)
         case .cursor: return .cursor
@@ -258,6 +260,7 @@ enum ProjectCommand: Equatable, Sendable {
     case replaceMotion(before: MotionStyle, after: MotionStyle)
     case replaceOpening(before: OpeningSequence, after: OpeningSequence)
     case replaceExportSettings(before: ExportSettings, after: ExportSettings)
+    case replaceSubtitleStyle(before: SubtitleStyle, after: SubtitleStyle)
     case replaceTimeline(before: ProjectTimeline, after: ProjectTimeline)
     case replaceProject(before: RecorderProject, after: RecorderProject)
     case insertZoom(ZoomAnimationClip)
@@ -281,6 +284,8 @@ enum ProjectCommand: Equatable, Sendable {
             return .replaceOpening(before: after, after: before)
         case let .replaceExportSettings(before, after):
             return .replaceExportSettings(before: after, after: before)
+        case let .replaceSubtitleStyle(before, after):
+            return .replaceSubtitleStyle(before: after, after: before)
         case let .replaceTimeline(before, after):
             return .replaceTimeline(before: after, after: before)
         case let .replaceProject(before, after):
@@ -312,6 +317,8 @@ enum ProjectCommand: Equatable, Sendable {
             return "调整开场"
         case .replaceExportSettings:
             return "调整导出设置"
+        case .replaceSubtitleStyle:
+            return "调整字幕"
         case .replaceTimeline:
             return "调整时间线"
         case .replaceProject:
@@ -358,6 +365,14 @@ enum ProjectCommand: Equatable, Sendable {
     ) -> ProjectCommand? {
         guard project.exportSettings != settings else { return nil }
         return .replaceExportSettings(before: project.exportSettings, after: settings)
+    }
+
+    static func replacingSubtitleStyle(
+        in project: RecorderProject,
+        with style: SubtitleStyle
+    ) -> ProjectCommand? {
+        guard project.subtitleStyle != style else { return nil }
+        return .replaceSubtitleStyle(before: project.subtitleStyle, after: style)
     }
 
     static func replacingTimeline(
@@ -470,6 +485,8 @@ enum ProjectCommand: Equatable, Sendable {
             return replacingCursor(in: before, with: after.cursorStyle)
         case .motion:
             return replacingMotion(in: before, with: after.motion)
+        case .subtitle:
+            return replacingSubtitleStyle(in: before, with: after.subtitleStyle)
         case .selection:
             break
         }
@@ -485,7 +502,7 @@ enum ProjectCommand: Equatable, Sendable {
             return replacingCursor(in: before, with: after.cursorStyle)
         case .zoomTrack, .screenMotionTrack:
             return nil
-        case .primarySegment, .mosaic, .sticker:
+        case .primarySegment, .mosaic, .sticker, .subtitleCue:
             return replacingTimeline(in: before, with: after.timeline)
         case .zoom:
             // 缩放手势可能同时改动相邻片段（相接修复/回落时长归一），按整段
@@ -603,6 +620,13 @@ enum ProjectReducer {
             }
             project.exportSettings = after
 
+        case let .replaceSubtitleStyle(before, after):
+            guard project.subtitleStyle == before else {
+                throw ProjectCommandError.staleState(domain: "字幕")
+            }
+            try validateDomain { try ProjectValidator.validate(after) }
+            project.subtitleStyle = after
+
         case let .replaceTimeline(before, after):
             guard project.timeline == before else {
                 throw ProjectCommandError.staleState(domain: "时间线")
@@ -708,6 +732,8 @@ enum ProjectReducer {
             return .overlappingZoom(id, otherID)
         case let .invalidTimeline(reason):
             return .invalidTimeline(reason: reason)
+        case let .invalidSubtitle(reason):
+            return .invalidProjectDomain("字幕", reason: reason)
         }
     }
 
@@ -1293,6 +1319,133 @@ final class EditorStore: ObservableObject {
         actionName: String? = nil
     ) throws {
         guard let command = ProjectCommand.replacingTimeline(in: project, with: timeline) else { return }
+        try perform(command, actionName: actionName)
+    }
+
+    // MARK: Subtitles
+
+    func setSubtitleCues(
+        _ cues: [SubtitleCue],
+        actionName: String = "生成字幕"
+    ) throws {
+        var timeline = project.timeline
+        timeline.subtitleCues = cues.sorted {
+            $0.timing.startTime == $1.timing.startTime
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.timing.startTime < $1.timing.startTime
+        }
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    func updateSubtitleCue(
+        id: UUID,
+        text: String,
+        actionName: String = "编辑字幕"
+    ) throws {
+        var timeline = project.timeline
+        guard let index = timeline.subtitleCues.firstIndex(where: { $0.id == id }) else { return }
+        guard timeline.subtitleCues[index].text != text else { return }
+        timeline.subtitleCues[index].text = text
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    /// Retimes one caption on the output clock. End times at or before the
+    /// start collapse to the shortest renderable duration, so a typed value
+    /// can never produce an inverted interval.
+    func updateSubtitleCueTiming(
+        id: UUID,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        actionName: String = "调整字幕时间码"
+    ) throws {
+        var timeline = project.timeline
+        guard let index = timeline.subtitleCues.firstIndex(where: { $0.id == id }) else { return }
+        let start = max(startTime.isFinite ? startTime : 0, 0)
+        let end = max(endTime.isFinite ? endTime : start + 0.2, start + 0.1)
+        let timing = OverlayTiming(startTime: start, duration: end - start)
+        guard timeline.subtitleCues[index].timing != timing else { return }
+        timeline.subtitleCues[index].timing = timing
+        timeline.subtitleCues.sort {
+            $0.timing.startTime == $1.timing.startTime
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.timing.startTime < $1.timing.startTime
+        }
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    func removeSubtitleCue(id: UUID, actionName: String = "删除字幕") throws {
+        var timeline = project.timeline
+        guard let index = timeline.subtitleCues.firstIndex(where: { $0.id == id }) else { return }
+        timeline.subtitleCues.remove(at: index)
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    /// Rewrites every occurrence of `find` in cue texts and word labels, so
+    /// the karaoke highlight scan still finds the words after the replace.
+    /// Cues emptied by the replace are removed, keeping the list renderable.
+    func replaceSubtitleText(
+        find: String,
+        replacement: String,
+        actionName: String = "替换字幕文本"
+    ) throws {
+        guard !find.isEmpty else { return }
+        var timeline = project.timeline
+        var changed = false
+        var emptiedIndices: [Int] = []
+        for index in timeline.subtitleCues.indices {
+            let cue = timeline.subtitleCues[index]
+            guard cue.text.contains(find)
+                || cue.words.contains(where: { $0.text.contains(find) })
+            else { continue }
+            let replacement_ = SubtitleCue(
+                id: cue.id,
+                timing: cue.timing,
+                text: cue.text.replacingOccurrences(of: find, with: replacement),
+                words: cue.words.map {
+                    SubtitleWord(
+                        text: $0.text.replacingOccurrences(of: find, with: replacement),
+                        offset: $0.offset
+                    )
+                }
+            )
+            if replacement_.isRenderable {
+                timeline.subtitleCues[index] = replacement_
+            } else {
+                emptiedIndices.append(index)
+            }
+            changed = true
+        }
+        for index in emptiedIndices.reversed() {
+            timeline.subtitleCues.remove(at: index)
+        }
+        guard changed else { return }
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    /// Folds a caption into the one after it: union interval, words re-based.
+    func mergeSubtitleCueWithNext(id: UUID, actionName: String = "合并字幕") throws {
+        var timeline = project.timeline
+        guard let index = timeline.subtitleCues.firstIndex(where: { $0.id == id }),
+              index + 1 < timeline.subtitleCues.count else { return }
+        let merged = timeline.subtitleCues[index].merged(with: timeline.subtitleCues[index + 1])
+        timeline.subtitleCues.replaceSubrange(index...index + 1, with: [merged])
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    /// Splits one caption into two halves at its temporal midpoint.
+    func splitSubtitleCue(id: UUID, actionName: String = "拆分字幕") throws {
+        var timeline = project.timeline
+        guard let index = timeline.subtitleCues.firstIndex(where: { $0.id == id }),
+              let halves = timeline.subtitleCues[index].splitAtMidpoint() else { return }
+        timeline.subtitleCues.replaceSubrange(
+            index...index,
+            with: [halves.leading, halves.trailing]
+        )
+        try replaceTimeline(with: timeline, actionName: actionName)
+    }
+
+    func replaceSubtitleStyle(with style: SubtitleStyle, actionName: String? = nil) throws {
+        guard let command = ProjectCommand.replacingSubtitleStyle(in: project, with: style) else { return }
         try perform(command, actionName: actionName)
     }
 

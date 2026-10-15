@@ -73,6 +73,9 @@ extension EditorTimelineView {
                 layerIndex: sticker.layerIndex
             )
         }
+        // Captions no longer share the effect lane: hiding mosaic/sticker
+        // must never hide the caption track. They render in their own lane
+        // (`subtitleTimelineClips`) while reusing this drag/resize machinery.
         return (mosaics + stickers).sorted {
             if $0.timing.startTime != $1.timing.startTime {
                 return $0.timing.startTime < $1.timing.startTime
@@ -84,13 +87,34 @@ extension EditorTimelineView {
         }
     }
 
+    var subtitleTimelineClips: [TimelineOverlayClip] {
+        editorStore.previewProject.timeline.subtitleCues
+            .filter(\.isRenderable)
+            .map { cue in
+                TimelineOverlayClip(
+                    id: cue.id,
+                    timing: cue.timing,
+                    title: cue.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    tint: editorOverlayClip,
+                    kind: .subtitle,
+                    layerIndex: -2
+                )
+            }
+            .sorted {
+                if $0.timing.startTime != $1.timing.startTime {
+                    return $0.timing.startTime < $1.timing.startTime
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
     /// Greedy interval packing gives every simultaneously visible overlay its
     /// own row while allowing non-overlapping clips to reuse space. No clip is
     /// hidden behind another merely because their authored times coincide.
-    var overlayTimelineRows: [[TimelineOverlayClip]] {
+    func packedTimelineRows(for clips: [TimelineOverlayClip]) -> [[TimelineOverlayClip]] {
         var rows: [[TimelineOverlayClip]] = []
         var rowEnds: [TimeInterval] = []
-        for clip in overlayTimelineClips {
+        for clip in clips {
             if let row = rowEnds.firstIndex(where: {
                 $0 <= clip.timing.startTime + 0.000_001
             }) {
@@ -102,6 +126,14 @@ extension EditorTimelineView {
             }
         }
         return rows
+    }
+
+    var overlayTimelineRows: [[TimelineOverlayClip]] {
+        packedTimelineRows(for: overlayTimelineClips)
+    }
+
+    var subtitleTimelineRows: [[TimelineOverlayClip]] {
+        packedTimelineRows(for: subtitleTimelineClips)
     }
 
     func trimMosaicClip(
@@ -221,33 +253,73 @@ extension EditorTimelineView {
         width: CGFloat,
         duration: TimeInterval
     ) -> some View {
-        let rows = overlayTimelineRows
+        overlayLaneTimeline(
+            rows: overlayTimelineRows,
+            height: overlayTimelineHeight,
+            emptyHint: "单击或拖拽添加",
+            width: width,
+            duration: duration,
+            allowsCreation: true
+        )
+    }
+
+    /// Captions cannot be authored by dragging on the timeline; their lane is
+    /// a pure arrangement surface. Blank-area gestures keep the empty-click
+    /// selection contract but never mint a mosaic clip.
+    func combinedSubtitleTimeline(
+        width: CGFloat,
+        duration: TimeInterval
+    ) -> some View {
+        overlayLaneTimeline(
+            rows: subtitleTimelineRows,
+            height: subtitleTimelineHeight,
+            emptyHint: "在字幕面板生成或导入",
+            width: width,
+            duration: duration,
+            allowsCreation: false
+        )
+    }
+
+    private func overlayLaneTimeline(
+        rows: [[TimelineOverlayClip]],
+        height: CGFloat,
+        emptyHint: String,
+        width: CGFloat,
+        duration: TimeInterval,
+        allowsCreation: Bool
+    ) -> some View {
         return ZStack(alignment: .topLeading) {
             timelineLaneSurface(
                 tint: editorOverlayClip,
-                isFocused: focusedTimelineLane == .overlays
+                isFocused: focusedTimelineLane == (allowsCreation ? .overlays : .subtitles)
             )
             Color.clear
                 .contentShape(Rectangle())
-                .gesture(overlayTrackGesture(clips: [], timelineWidth: width, duration: duration))
+                .gesture(overlayTrackGesture(
+                    clips: [],
+                    timelineWidth: width,
+                    duration: duration,
+                    allowsCreation: allowsCreation
+                ))
             if rows.isEmpty {
                 timelineEmptyTrackHint(
-                    "单击或拖拽添加",
+                    emptyHint,
                     documentWidth: width
                 )
-                    .frame(height: overlayTimelineHeight)
+                    .frame(height: height)
             }
             VStack(spacing: 4) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, clips in
                     overlayClipRow(
                         clips: clips,
                         width: width,
-                        duration: duration
+                        duration: duration,
+                        allowsCreation: allowsCreation
                     )
                 }
             }
             .padding(.vertical, 10)
-            if let range = overlayCreateRange, range.upperBound - range.lowerBound > 0.01 {
+            if allowsCreation, let range = overlayCreateRange, range.upperBound - range.lowerBound > 0.01 {
                 RoundedRectangle(cornerRadius: 7)
                     .fill(editorOverlayClip.opacity(0.18))
                     .overlay(RoundedRectangle(cornerRadius: 7)
@@ -259,7 +331,7 @@ extension EditorTimelineView {
         }
         .frame(
             width: width,
-            height: overlayTimelineHeight,
+            height: height,
             alignment: .topLeading
         )
     }
@@ -267,7 +339,8 @@ extension EditorTimelineView {
     private func overlayClipRow(
         clips: [TimelineOverlayClip],
         width: CGFloat,
-        duration: TimeInterval
+        duration: TimeInterval,
+        allowsCreation: Bool
     ) -> some View {
         ZStack(alignment: .topLeading) {
             // Match the zoom lane's layout contract: the lane itself owns the
@@ -335,7 +408,13 @@ extension EditorTimelineView {
                         hoveredOverlaySelection = nil
                     }
                 }
-                .contextMenu { clipClipboardMenu(for: selection) }
+                .contextMenu {
+                    // A caption is text, not a copyable effect clip; an inert
+                    // clipboard menu would only offer dead actions.
+                    if clip.kind != .subtitle {
+                        clipClipboardMenu(for: selection)
+                    }
+                }
                 .help("拖动中部移动；拖动两端调整时长")
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(String(format: appLocalized("%@片段"), clip.title))
@@ -361,14 +440,16 @@ extension EditorTimelineView {
         .gesture(overlayTrackGesture(
             clips: clips,
             timelineWidth: width,
-            duration: duration
+            duration: duration,
+            allowsCreation: allowsCreation
         ))
     }
 
     func overlayTrackGesture(
         clips: [TimelineOverlayClip],
         timelineWidth: CGFloat,
-        duration: TimeInterval
+        duration: TimeInterval,
+        allowsCreation: Bool = true
     ) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
@@ -378,10 +459,16 @@ extension EditorTimelineView {
                         at: value.startLocation.x,
                         clips: clips,
                         timelineWidth: timelineWidth,
-                        duration: duration
+                        duration: duration,
+                        allowsCreation: allowsCreation
                     )
                 }
                 if gestureOwnership.activeIntent == .overlayCreate {
+                    if !allowsCreation {
+                        // A caption-lane blank drag must not preview a mosaic
+                        // range; mouse-up retires the gesture as a plain click.
+                        return
+                    }
                     let start = overlayCreateStart ?? EditorTimelineMath.clampedTime(atX: Double(value.startLocation.x),
                         width: Double(timelineWidth), duration: duration)
                     let end = magneticTime(EditorTimelineMath.clampedTime(atX: Double(value.location.x),
@@ -413,13 +500,17 @@ extension EditorTimelineView {
 }
             .onEnded { value in
                 EditorDragFrameCoalescer.shared.flush()
-                if gestureOwnership.activeIntent == .overlayCreate, let range = overlayCreateRange {
+                if gestureOwnership.activeIntent == .overlayCreate {
+                    let range = overlayCreateRange
                     overlayCreateRange = nil
                     overlayCreateStart = nil
                     endTimelineGesture(.overlayCreate)
+                    guard let range else { return }
                     let isDrawnRange = EditorTimelineRangeCreationPolicy.shouldCommit(
                         horizontalTranslation: value.translation.width)
                     if !isDrawnRange && emptyClickClearsSelection { return }
+                    // Caption-lane blank drags never mint a mosaic clip.
+                    guard allowsCreation else { return }
                     let length = isDrawnRange ? max(range.upperBound - range.lowerBound, 0.08) : 3
                     let start = min(range.lowerBound, max(duration - length, 0))
                     let clip = MosaicClip(timing: OverlayTiming(startTime: start,
@@ -455,7 +546,8 @@ extension EditorTimelineView {
         at x: CGFloat,
         clips: [TimelineOverlayClip],
         timelineWidth: CGFloat,
-        duration: TimeInterval
+        duration: TimeInterval,
+        allowsCreation: Bool = true
     ) {
         cancelActiveTimelineGesture()
         let candidates = clips.filter { clip in
@@ -474,6 +566,7 @@ extension EditorTimelineView {
         }) ?? candidates.last else {
             prepareEmptyTimelineClick()
             guard beginTimelineGesture(.overlayCreate) else { return }
+            guard allowsCreation else { return }
             let start = EditorTimelineMath.clampedTime(atX: Double(x),
                 width: Double(timelineWidth), duration: duration)
             let snapped = magneticTime(start, width: timelineWidth, duration: duration)
@@ -530,6 +623,9 @@ extension EditorTimelineView {
         case .sticker:
             return editorStore.project.timeline.stickerClips
                 .first(where: { $0.id == id })?.timing
+        case .subtitle:
+            return editorStore.project.timeline.subtitleCues
+                .first(where: { $0.id == id })?.timing
         }
     }
 
@@ -565,6 +661,11 @@ extension EditorTimelineView {
                     $0.id == drag.id
                 }) else { return }
                 project.timeline.stickerClips[index].timing = timing
+            case .subtitle:
+                guard let index = project.timeline.subtitleCues.firstIndex(where: {
+                    $0.id == drag.id
+                }) else { return }
+                project.timeline.subtitleCues[index].timing = timing
             }
         }
     }

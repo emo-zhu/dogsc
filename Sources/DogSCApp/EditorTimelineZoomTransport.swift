@@ -582,6 +582,7 @@ func zoomTimeline(width: CGFloat, duration: TimeInterval) -> some View {
         case .cameraMotion: return "删除选中的摄像运动"
         case .mosaic: return selectedRegionIsSpotlight ? "删除选中的突出" : "删除选中的柔化"
         case .sticker: return "删除选中的贴图"
+        case .subtitleCue: return "删除选中的字幕"
         case nil: return "删除当前时间线选中项"
         }
     }
@@ -821,6 +822,13 @@ func zoomTimeline(width: CGFloat, duration: TimeInterval) -> some View {
             case .mosaic, .sticker:
                 do {
                     try editorStore.removeSelectedOverlay()
+                } catch {
+                    onError(error.localizedDescription)
+                }
+            case let .subtitleCue(id):
+                do {
+                    try editorStore.removeSubtitleCue(id: id)
+                    editorStore.selection = .canvas
                 } catch {
                     onError(error.localizedDescription)
                 }

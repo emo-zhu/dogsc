@@ -273,9 +273,10 @@ struct ExportSheet: View {
     }
 
     private var exportContentHeight: CGFloat {
-        let preferred: CGFloat = selectedOutputKind == .video
+        let base: CGFloat = selectedOutputKind == .video
             ? (exportScope.outputRange == nil ? 412 : 436)
             : (exportScope.outputRange == nil ? 300 : 344)
+        let preferred = base + (selectedOutputKind == .video && hasSoftSubtitleChoice ? 96 : 0)
         let screenHeight = (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
         return min(preferred, max(220, screenHeight - 180))
     }
@@ -407,6 +408,14 @@ struct ExportSheet: View {
                 if selectedOutputKind == .video {
                     exportSummaryRow("分辨率", value: exportDimensionsText)
                     exportSummaryRow("帧率", value: "\(editorStore.project.exportSettings.frameRate.rawValue) fps")
+                    if hasSoftSubtitleChoice {
+                        exportSummaryRow(
+                            "字幕",
+                            value: editorStore.project.exportSettings.subtitleMode == .burnIn
+                                ? appLocalized("硬烧录")
+                                : appLocalized("软字幕轨")
+                        )
+                    }
                 }
                 exportSummaryRow("时长", value: Self.exportTimecode(exportScope.outputRange?.duration ?? mediaSession.outputDuration))
             }
@@ -474,10 +483,44 @@ struct ExportSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 exportResolutionChoices
                 exportFrameRateChoices
+                if hasSoftSubtitleChoice {
+                    Divider().overlay(EditorTheme.chrome(0.06))
+                    exportSubtitleModeChoices
+                }
             }
             .padding(12)
             .background(EditorTheme.cardFill,
                         in: RoundedRectangle(cornerRadius: EditorInterfaceRadius.tile, style: .continuous))
+        }
+    }
+
+    /// The caption output choice only matters when the project actually has a
+    /// visible caption track, so it stays out of the way otherwise.
+    private var hasSoftSubtitleChoice: Bool {
+        editorStore.project.subtitleStyle.isEnabled
+            && editorStore.project.timeline.subtitleCues.contains(where: \.isRenderable)
+    }
+
+    private var exportSubtitleModeChoices: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("字幕").font(.appUI(size: 12)).foregroundStyle(EditorTheme.secondaryText)
+            EditorSegmentedControl(
+                options: ExportSubtitleMode.allCases,
+                title: { $0 == .burnIn ? "硬烧录" : "软字幕轨" },
+                optionHelp: { mode in
+                    mode == .burnIn
+                        ? "烧录进画面，所有播放器可见"
+                        : "内嵌可开关字幕轨"
+                },
+                selection: subtitleModeBinding
+            )
+            .disabled(exporter.isExporting)
+            Text(editorStore.project.exportSettings.subtitleMode == .burnIn
+                 ? appLocalized("字幕烧录进画面，任何播放器都能看到，但无法关闭。")
+                 : appLocalized("软字幕轨可在支持的播放器里开关；QuickTime Player 可能默认不显示，推荐用 VLC / IINA 查看。"))
+                .font(.appUI(size: 11))
+                .foregroundStyle(EditorTheme.tertiaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -667,6 +710,17 @@ struct ExportSheet: View {
             set: { resolution in
                 updateExportSettings(actionName: "调整导出分辨率") {
                     $0.resolution = resolution
+                }
+            }
+        )
+    }
+
+    private var subtitleModeBinding: Binding<ExportSubtitleMode> {
+        Binding(
+            get: { editorStore.project.exportSettings.subtitleMode },
+            set: { mode in
+                updateExportSettings(actionName: "调整字幕输出方式") {
+                    $0.subtitleMode = mode
                 }
             }
         )

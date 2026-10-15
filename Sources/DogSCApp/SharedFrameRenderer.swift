@@ -255,6 +255,13 @@ enum SharedFrameRenderer {
                         canvasRect: canvasRect
                     )
                 }
+            case .subtitle:
+                guard let subtitleScene = scene.subtitle else { continue }
+                result = renderSubtitle(
+                    subtitleScene,
+                    over: result,
+                    canvasRect: canvasRect
+                )
             }
         }
         return result.cropped(to: canvasRect)
@@ -1170,6 +1177,269 @@ enum SharedFrameRenderer {
             CTLineDraw(line, context)
             guard let image = context.makeImage() else { return nil }
             return CIImage(cgImage: image)
+        }
+    }
+
+    /// Renders one caption block: a translucent rounded backdrop with
+    /// wrapped, centered text. The text raster is cached by content and
+    /// layout so playback and export reuse identical pixels.
+    private nonisolated static func renderSubtitle(
+        _ scene: FrameSubtitleScene,
+        over result: CIImage,
+        canvasRect: CGRect
+    ) -> CIImage {
+        let blockRect = coreImageRect(
+            from: scene.rect,
+            canvasHeight: canvasRect.height
+        )
+        let padding = scene.fontSize * 0.42
+        let contentInset = padding * 1.35
+        let textBounds = blockRect.insetBy(dx: contentInset, dy: padding)
+        guard textBounds.width > 2, textBounds.height > 2 else { return result }
+        guard let textLayer = subtitleTextLayer(
+            scene: scene,
+            maximumWidth: textBounds.width
+        ) else { return result }
+        let textExtent = textLayer.extent
+        let textX: CGFloat
+        switch scene.textAlignment {
+        case .center:
+            textX = blockRect.midX - textExtent.width / 2
+        case .leading:
+            textX = textBounds.minX
+        case .trailing:
+            textX = textBounds.maxX - textExtent.width
+        }
+        let textY = blockRect.midY - textExtent.height / 2
+        let positionedText = textLayer.transformed(
+            by: CGAffineTransform(
+                translationX: textX - textExtent.minX,
+                y: textY - textExtent.minY
+            )
+        )
+        var caption = CIImage(color: .clear).cropped(to: blockRect)
+        if scene.backdropOpacity > 0.001 {
+            let components = scene.backdropColor.components
+            let backdrop = CIImage(color: CIColor(
+                red: components.red,
+                green: components.green,
+                blue: components.blue,
+                alpha: scene.backdropOpacity
+            ))
+            .cropped(to: blockRect)
+            let roundedMask = roundedMask(rect: blockRect, radius: scene.cornerRadius)
+            let shapedBackdrop = backdrop.applyingFilter(
+                "CIBlendWithMask",
+                parameters: [
+                    kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: blockRect),
+                    kCIInputMaskImageKey: roundedMask,
+                ]
+            )
+            caption = shapedBackdrop.composited(over: caption)
+        }
+        if scene.shadowOpacity > 0.001, scene.shadowRadius > 0.5 {
+            // The glyph raster is reused as the shadow: recolor it to a
+            // translucent black, blur, and drop it below the fill. Doing this
+            // in image space (instead of a CGContext shadow) keeps the offset
+            // and radius identical between preview and export.
+            let shadowAlpha = scene.shadowOpacity
+            let tinted = positionedText.applyingFilter(
+                "CIColorMatrix",
+                parameters: [
+                    "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: shadowAlpha),
+                ]
+            )
+            let shadow = tinted
+                .clampedToExtent()
+                .applyingFilter(
+                    "CIGaussianBlur",
+                    parameters: [kCIInputRadiusKey: scene.shadowRadius]
+                )
+                .transformed(
+                    by: CGAffineTransform(translationX: 0, y: -scene.shadowOffsetY)
+                )
+                .cropped(to: canvasRect)
+            caption = shadow.composited(over: caption)
+        }
+        caption = positionedText.composited(over: caption)
+        return caption.composited(over: result).cropped(to: canvasRect)
+    }
+
+    /// Word-wrapped rasterization via CTFramesetter. Lines are laid out in a
+    /// CGPath spanning the full block width, then the drawn result is trimmed
+    /// to the ink bounds so vertical centering works for any line count.
+    private nonisolated static func subtitleTextLayer(
+        scene: FrameSubtitleScene,
+        maximumWidth: CGFloat
+    ) -> CIImage? {
+        let trimmed = scene.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fontSize = CGFloat(scene.fontSize)
+        guard !trimmed.isEmpty, fontSize > 0, maximumWidth > 2 else { return nil }
+        let components = scene.textColor.components
+        let strokeComponents = scene.strokeColor.components
+        let highlightComponents = scene.highlightColor.components
+        let strokePercent = scene.strokeWidth * 100
+        // The karaoke span changes every word, so it belongs in the key. When
+        // highlighting is off the sentinel range keeps one cached raster.
+        let key = String(
+            format: "subtitle|%@|%.2f|%@|%@|%.2f|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f|%lld|%lld|%.3f|%.3f|%.3f",
+            trimmed,
+            Double(fontSize),
+            scene.fontFamily.rawValue,
+            scene.textAlignment.rawValue,
+            strokePercent,
+            components.red, components.green, components.blue,
+            strokeComponents.red, strokeComponents.green, strokeComponents.blue,
+            Int64(scene.highlightRange?.lowerBound ?? -1),
+            Int64(scene.highlightRange?.count ?? 0),
+            highlightComponents.red, highlightComponents.green, highlightComponents.blue
+        ) as NSString
+        return screenChromeTextCache.image(for: key) {
+            let font = subtitleFont(family: scene.fontFamily, size: fontSize)
+            var alignment: CTTextAlignment = {
+                switch scene.textAlignment {
+                case .leading: .left
+                case .center: .center
+                case .trailing: .right
+                }
+            }()
+            var lineSpacing = fontSize * 0.28
+            // The setting struct only borrows the pointer during
+            // CTParagraphStyleCreate, so keep the values alive inside the
+            // buffer scopes where the pointer is guaranteed valid.
+            let paragraph: CTParagraphStyle = withUnsafeBytes(of: &alignment) { alignmentBytes in
+                withUnsafeBytes(of: &lineSpacing) { spacingBytes in
+                    let settings = [
+                        CTParagraphStyleSetting(
+                            spec: .alignment,
+                            valueSize: MemoryLayout<CTTextAlignment>.size,
+                            value: alignmentBytes.baseAddress!
+                        ),
+                        CTParagraphStyleSetting(
+                            spec: CTParagraphStyleSpecifier.lineSpacingAdjustment,
+                            valueSize: MemoryLayout<CGFloat>.size,
+                            value: spacingBytes.baseAddress!
+                        ),
+                    ]
+                    return CTParagraphStyleCreate(settings, settings.count)
+                }
+            }
+            var attributes: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(
+                    red: components.red, green: components.green, blue: components.blue, alpha: 1),
+                NSAttributedString.Key(kCTParagraphStyleAttributeName as String): paragraph,
+            ]
+            if strokePercent > 0.01 {
+                // CoreText reads a positive stroke width as a percentage of
+                // the font size and keeps the fill underneath the outline.
+                attributes[NSAttributedString.Key(kCTStrokeWidthAttributeName as String)] =
+                    strokePercent as NSNumber
+                attributes[NSAttributedString.Key(kCTStrokeColorAttributeName as String)] = CGColor(
+                    red: strokeComponents.red,
+                    green: strokeComponents.green,
+                    blue: strokeComponents.blue,
+                    alpha: 1
+                )
+            }
+            let attributed = NSMutableAttributedString(string: trimmed, attributes: attributes)
+            if let highlightRange = scene.highlightRange {
+                let span = NSRange(
+                    location: highlightRange.lowerBound,
+                    length: highlightRange.count
+                )
+                if span.location >= 0, span.length > 0,
+                   NSMaxRange(span) <= attributed.length {
+                    // The karaoke word keeps the outline for legibility but
+                    // swaps its fill, so it reads as "being spoken" rather than
+                    // as a different caption.
+                    attributed.addAttribute(
+                        NSAttributedString.Key(kCTForegroundColorAttributeName as String),
+                        value: CGColor(
+                            red: highlightComponents.red,
+                            green: highlightComponents.green,
+                            blue: highlightComponents.blue,
+                            alpha: 1
+                        ),
+                        range: span
+                    )
+                }
+            }
+            let setter = CTFramesetterCreateWithAttributedString(attributed)
+            // Allow generous height; the frame path only constrains wrapping.
+            let layoutSize = CGSize(width: maximumWidth, height: fontSize * 8)
+            let path = CGPath(rect: CGRect(origin: .zero, size: layoutSize), transform: nil)
+            let frame = CTFramesetterCreateFrame(
+                setter, CFRange(location: 0, length: 0), path, nil
+            )
+            guard CTFrameGetVisibleStringRange(frame).length > 0 else { return nil }
+            let width = Int(layoutSize.width.rounded(.up))
+            let height = Int(layoutSize.height.rounded(.up))
+            guard width > 0, height > 0, width < 32768, height < 32768,
+                  let context = CGContext(data: nil, width: width, height: height,
+                    bitsPerComponent: 8, bytesPerRow: 0,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            context.textMatrix = .identity
+            CTFrameDraw(frame, context)
+            guard let rendered = context.makeImage() else { return nil }
+            // Trim the full-size canvas to the union of the drawn line bounds
+            // so the caller can center the ink for any line count.
+            let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+            var origins = [CGPoint](repeating: .zero, count: lines.count)
+            if !lines.isEmpty {
+                CTFrameGetLineOrigins(
+                    frame,
+                    CFRange(location: 0, length: lines.count),
+                    &origins
+                )
+            }
+            var ink = CGRect.null
+            for (index, line) in lines.enumerated() {
+                var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+                let lineWidth = CGFloat(
+                    CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+                )
+                let origin = origins[index]
+                ink = ink.union(CGRect(
+                    x: origin.x,
+                    y: origin.y - descent,
+                    width: lineWidth,
+                    height: ascent + descent
+                ))
+            }
+            let safeInk = ink.intersection(CGRect(origin: .zero, size: layoutSize))
+            guard !safeInk.isNull, safeInk.width > 0, safeInk.height > 0 else { return nil }
+            return CIImage(cgImage: rendered).cropped(to: safeInk)
+        }
+    }
+
+    /// One preset to one concrete face. The design variants fall back to the
+    /// system face when the descriptor does not offer them, so an unsupported
+    /// family can never erase the caption.
+    private nonisolated static func subtitleFont(
+        family: SubtitleFontFamily,
+        size: CGFloat
+    ) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: .medium)
+        switch family {
+        case .system:
+            return base
+        case .rounded:
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded),
+                  let font = NSFont(descriptor: descriptor, size: size)
+            else { return base }
+            return font
+        case .serif:
+            guard let descriptor = base.fontDescriptor.withDesign(.serif),
+                  let font = NSFont(descriptor: descriptor, size: size)
+            else { return base }
+            return font
+        case .monospaced:
+            return NSFont.monospacedSystemFont(ofSize: size, weight: .medium)
         }
     }
 

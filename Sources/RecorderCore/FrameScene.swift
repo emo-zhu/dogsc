@@ -378,6 +378,69 @@ public enum FrameLayerRole: String, Equatable, Sendable {
     case spotlight
     case camera
     case stickers
+    case subtitle
+}
+
+/// Fully evaluated caption for one output time. Geometry is expressed in
+/// canvas coordinates (top-left origin); the renderer only rasterizes text.
+public struct FrameSubtitleScene: Equatable, Sendable {
+    public var text: String
+    public var rect: CompositionRect
+    public var fontSize: Double
+    public var fontFamily: SubtitleFontFamily
+    public var textAlignment: SubtitleTextAlignment
+    public var textColor: HexColor
+    /// Outline width as a fraction of ``fontSize``; zero draws fill only.
+    public var strokeWidth: Double
+    public var strokeColor: HexColor
+    public var shadowOpacity: Double
+    /// Shadow radius in canvas points.
+    public var shadowRadius: Double
+    /// Downward shadow offset in canvas points.
+    public var shadowOffsetY: Double
+    public var backdropColor: HexColor
+    public var backdropOpacity: Double
+    public var cornerRadius: Double
+    /// UTF-16 range of the word being spoken at the sampled time, already
+    /// resolved against ``text`` so the renderer only tints this span.
+    public var highlightRange: Range<Int>?
+    public var highlightColor: HexColor
+
+    public init(
+        text: String,
+        rect: CompositionRect,
+        fontSize: Double,
+        textColor: HexColor,
+        backdropColor: HexColor,
+        backdropOpacity: Double,
+        cornerRadius: Double,
+        fontFamily: SubtitleFontFamily = .system,
+        textAlignment: SubtitleTextAlignment = .center,
+        strokeWidth: Double = 0,
+        strokeColor: HexColor = .black,
+        shadowOpacity: Double = 0,
+        shadowRadius: Double = 0,
+        shadowOffsetY: Double = 0,
+        highlightRange: Range<Int>? = nil,
+        highlightColor: HexColor = SubtitleStyle.defaultHighlightColor
+    ) {
+        self.text = text
+        self.rect = rect
+        self.fontSize = max(fontSize, 1)
+        self.fontFamily = fontFamily
+        self.textAlignment = textAlignment
+        self.textColor = textColor
+        self.strokeWidth = min(max(strokeWidth, 0), 0.2)
+        self.strokeColor = strokeColor
+        self.shadowOpacity = min(max(shadowOpacity, 0), 1)
+        self.shadowRadius = max(shadowRadius, 0)
+        self.shadowOffsetY = shadowOffsetY
+        self.backdropColor = backdropColor
+        self.backdropOpacity = min(max(backdropOpacity, 0), 1)
+        self.cornerRadius = max(cornerRadius, 0)
+        self.highlightRange = highlightRange
+        self.highlightColor = highlightColor
+    }
 }
 
 /// Complete immutable interpretation of one project time. A renderer may read
@@ -392,6 +455,7 @@ public struct FrameScene: Equatable, Sendable {
     public var cursor: FrameCursorScene?
     public var stickers: [FrameStickerScene]
     public var stickerBackdrop: FrameStickerBackdropScene
+    public var subtitle: FrameSubtitleScene?
     public var layerOrder: [FrameLayerRole]
 
     public init(
@@ -404,6 +468,7 @@ public struct FrameScene: Equatable, Sendable {
         cursor: FrameCursorScene?,
         stickers: [FrameStickerScene] = [],
         stickerBackdrop: FrameStickerBackdropScene? = nil,
+        subtitle: FrameSubtitleScene? = nil,
         layerOrder: [FrameLayerRole]
     ) {
         self.time = time
@@ -415,6 +480,7 @@ public struct FrameScene: Equatable, Sendable {
         self.cursor = cursor
         self.stickers = stickers
         self.stickerBackdrop = stickerBackdrop ?? FrameStickerBackdropScene(stickers: stickers)
+        self.subtitle = subtitle
         self.layerOrder = layerOrder
     }
 }
@@ -502,7 +568,8 @@ public enum FrameSceneEvaluator {
         cameraMotionTrack: CameraMotionTrack? = nil,
         stickerTrack: StickerTransitionTrack? = nil,
         cameraTimeline: TimelineMediaPlan? = nil,
-        color: FrameColorContract = .sdrDesktop
+        color: FrameColorContract = .sdrDesktop,
+        includesSubtitles: Bool = true
     ) -> FrameRenderPlan {
         let safeDuration = outputDuration.isFinite ? max(outputDuration, 0) : 0
         let safeTime = presentationTime.isFinite
@@ -528,7 +595,8 @@ public enum FrameSceneEvaluator {
             screenMotionTrack: screenMotionTrack,
             cameraMotionTrack: cameraMotionTrack,
             stickerTrack: stickerTrack,
-            color: color
+            color: color,
+            includesSubtitles: includesSubtitles
         )
         return FrameRenderPlan(
             presentationTime: safeTime,
@@ -553,7 +621,8 @@ public enum FrameSceneEvaluator {
         screenMotionTrack: ScreenMotionTrack? = nil,
         cameraMotionTrack: CameraMotionTrack? = nil,
         stickerTrack: StickerTransitionTrack? = nil,
-        color: FrameColorContract = .sdrDesktop
+        color: FrameColorContract = .sdrDesktop,
+        includesSubtitles: Bool = true
     ) -> FrameScene {
         let width = max(canvasSize.width, 2)
         let height = max(canvasSize.height, 2)
@@ -813,6 +882,15 @@ public enum FrameSceneEvaluator {
         }
         if camera != nil, camera?.opacity ?? 0 > 0 { order.append(.camera) }
         if !stickers.isEmpty { order.append(.stickers) }
+        let subtitle = includesSubtitles
+            ? subtitleScene(
+                project: project,
+                at: sampleTime,
+                canvasWidth: width,
+                canvasHeight: height
+            )
+            : nil
+        if subtitle != nil { order.append(.subtitle) }
         return FrameScene(
             time: sampleTime,
             canvasSize: CompositionSize(width: width, height: height),
@@ -828,7 +906,80 @@ public enum FrameSceneEvaluator {
             cursor: cursor,
             stickers: stickers,
             stickerBackdrop: stickerSample.backdrop,
+            subtitle: subtitle,
             layerOrder: order
+        )
+    }
+
+    /// One active caption at the sample time. The longest cue wins when two
+    /// cues briefly overlap so a cut junction never flashes two captions.
+    private static func subtitleScene(
+        project: RecorderProject,
+        at time: TimeInterval,
+        canvasWidth: Double,
+        canvasHeight: Double
+    ) -> FrameSubtitleScene? {
+        guard project.subtitleStyle.isEnabled else { return nil }
+        let cue = project.timeline.subtitleCues
+            .filter { $0.timing.contains(time) && $0.isRenderable }
+            .max {
+                $0.timing.duration == $1.timing.duration
+                    ? $0.id.uuidString < $1.id.uuidString
+                    : $0.timing.duration < $1.timing.duration
+            }
+        guard let cue else { return nil }
+        let style = project.subtitleStyle
+        let fontSize = SubtitleStyle.canonicalFontSize
+            * style.fontScale
+            * (canvasHeight / 1_080)
+        // The highlight is resolved against the same trimmed string the
+        // renderer rasterizes, so its offsets always line up with the glyphs.
+        let trimmedText = cue.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let highlightRange = style.highlightEnabled
+            ? cue.highlightRange(in: trimmedText, at: time)
+            : nil
+        let blockWidth = canvasWidth * min(max(style.maxWidthFraction, 0.3), 0.95)
+        let inset = canvasHeight * min(max(style.baselineInset, 0.02), 0.25)
+        let padding = fontSize * 0.42
+        let contentInset = padding * 1.35
+        let usableWidth = max(blockWidth - contentInset * 2, fontSize)
+        // The backdrop grows with the wrapped line count so multi-line
+        // captions stay inside the rounded block instead of overflowing it.
+        let lineCount = SubtitleStyle.estimatedLineCount(
+            of: trimmedText,
+            usableWidth: usableWidth,
+            fontSize: fontSize
+        )
+        let height = fontSize * 1.7 + padding * 2
+            + Double(lineCount - 1) * fontSize * 1.58
+        let originY: Double
+        switch style.anchor {
+        case .top: originY = inset
+        case .middle: originY = (canvasHeight - height) / 2
+        case .bottom: originY = canvasHeight - inset - height
+        }
+        return FrameSubtitleScene(
+            text: cue.text,
+            rect: CompositionRect(
+                x: (canvasWidth - blockWidth) / 2,
+                y: originY,
+                width: blockWidth,
+                height: height
+            ),
+            fontSize: fontSize,
+            textColor: style.textColor,
+            backdropColor: SubtitleStyle.backdropColor,
+            backdropOpacity: style.backdropOpacity,
+            cornerRadius: fontSize * 0.32,
+            fontFamily: style.fontFamily,
+            textAlignment: style.textAlignment,
+            strokeWidth: style.strokeWidth,
+            strokeColor: style.strokeColor,
+            shadowOpacity: style.shadowOpacity,
+            shadowRadius: fontSize * 0.16,
+            shadowOffsetY: fontSize * 0.05,
+            highlightRange: highlightRange,
+            highlightColor: style.highlightColor
         )
     }
 

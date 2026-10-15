@@ -59,6 +59,19 @@ final class DirectExportPipeline: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
     private let audioInput: AVAssetWriterInput?
+    /// Present only when the project asks for a soft caption track. A soft
+    /// track replaces the burned-in caption, so the frame renderer is told to
+    /// leave subtitles out whenever this input exists.
+    private let subtitleInput: AVAssetWriterInput?
+    private let subtitleFormatDescription: CMFormatDescription?
+    /// Captions clipped to the export window, rebased to file time, with the
+    /// gaps between them filled by clearing samples.
+    private let subtitleSamples: [SubtitleFileWriter.ResolvedCue]
+    /// Next caption to append; guarded by the video queue, like every cursor
+    /// beside it.
+    private var pendingSubtitleIndex = 0
+    /// Set once the caption track has been closed, so it is closed exactly once.
+    private var subtitlesFinished = false
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private let canvasSize: CGSize
     private let project: RecorderProject
@@ -358,7 +371,44 @@ final class DirectExportPipeline: @unchecked Sendable {
             audioOutput = nil
             audioInput = nil
         }
+
+        // Soft captions are an alternative to the burned-in picture, not an
+        // addition to it: only one of the two paths may carry the cues, or a
+        // player that renders the track would show every caption twice. The
+        // style's own enabled flag still governs whether captions exist at all.
+        let requestedSoftTrack = project.exportSettings.subtitleMode == .softTrack
+            && project.subtitleStyle.isEnabled
+        let resolvedSubtitleCues = requestedSoftTrack
+            ? SubtitleFileWriter.resolve(
+                cues: project.timeline.subtitleCues,
+                outputRange: outputRange
+            )
+            : []
+        if !resolvedSubtitleCues.isEmpty,
+           let description = SoftSubtitleTrackWriter.makeFormatDescription() {
+            let input = AVAssetWriterInput(
+                mediaType: .subtitle,
+                outputSettings: nil,
+                sourceFormatHint: description
+            )
+            input.expectsMediaDataInRealTime = false
+            guard writer.canAdd(input) else {
+                throw VideoExporterError.exportFailed("无法创建软字幕文本轨")
+            }
+            writer.add(input)
+            subtitleInput = input
+            subtitleFormatDescription = description
+            subtitleSamples = SoftSubtitleTrackWriter.playbackSamples(for: resolvedSubtitleCues)
+        } else {
+            subtitleInput = nil
+            subtitleFormatDescription = nil
+            subtitleSamples = []
+        }
     }
+
+    /// True while the exported file carries captions as a separate track, in
+    /// which case the frame renderer must leave them out of the picture.
+    private var emitsSoftSubtitleTrack: Bool { subtitleInput != nil }
 
     func run() async throws {
         try Task.checkCancellation()
@@ -475,6 +525,67 @@ final class DirectExportPipeline: @unchecked Sendable {
         }
     }
 
+    /// Result of trying to hand caption samples to the writer.
+    private enum SubtitleDrainOutcome {
+        /// The writer is not taking data this instant; retry on the next frame.
+        case blocked
+        case done
+        case failed(any Error)
+    }
+
+    /// Hands the writer as many caption samples as it will currently accept.
+    ///
+    /// The samples are *offered*, never pushed: ``blocking`` is false during the
+    /// video loop, so a writer that is not ready simply stops this call and the
+    /// next frame top-ups again. That self-throttling is what keeps the two
+    /// inputs alive. Holding the caption track open until the picture ended
+    /// instead stalled the export outright: AVAssetWriter interleaves the inputs
+    /// by timestamp, so with an open input that had run out of data it stopped
+    /// accepting video samples just past the last cue and never resumed.
+    ///
+    /// Must run on the video queue: ``pendingSubtitleIndex`` is unguarded, like
+    /// the other per-frame cursors beside it.
+    private func drainSubtitles(blocking: Bool) -> SubtitleDrainOutcome {
+        guard let subtitleInput, let formatDescription = subtitleFormatDescription else {
+            return .done
+        }
+        while pendingSubtitleIndex < subtitleSamples.count {
+            if !subtitleInput.isReadyForMoreMediaData {
+                guard blocking, !isCancellationRequested else { return .blocked }
+                var waits = 0
+                while !subtitleInput.isReadyForMoreMediaData {
+                    guard !isCancellationRequested, waits < 30_000 else { return .blocked }
+                    waits += 1
+                    usleep(1_000)
+                }
+            }
+            guard let sample = SoftSubtitleTrackWriter.makeSample(
+                cue: subtitleSamples[pendingSubtitleIndex],
+                formatDescription: formatDescription
+            ) else {
+                return .failed(VideoExporterError.exportFailed("无法生成字幕文本样本"))
+            }
+            guard subtitleInput.append(sample) else {
+                return .failed(
+                    writer.error ?? VideoExporterError.exportFailed("写入字幕轨失败")
+                )
+            }
+            pendingSubtitleIndex += 1
+            watchdog?.recordProgress()
+        }
+        closeSubtitleTrack()
+        return .done
+    }
+
+    /// Closes the caption track as soon as its last sample is in, rather than
+    /// holding it open until the picture ends. See ``drainSubtitles``. At most
+    /// once, so the input is never finished twice.
+    private func closeSubtitleTrack() {
+        guard let subtitleInput, !subtitlesFinished else { return }
+        subtitlesFinished = true
+        subtitleInput.markAsFinished()
+    }
+
     private func processVideo() {
         guard !hasVideoFinished else { return }
         let durationSeconds = projectOutputDuration
@@ -492,6 +603,12 @@ final class DirectExportPipeline: @unchecked Sendable {
               !isCancellationRequested,
               videoInput.isReadyForMoreMediaData,
               frameIndex < totalFrames {
+            // Offered before the frame is appended so the caption track stays
+            // just ahead of the picture rather than trailing it.
+            if case .failed(let error) = drainSubtitles(blocking: false) {
+                finishVideo(error: error)
+                return
+            }
             var transientFailure = false
             autoreleasepool {
                 if writer.status == .failed {
@@ -609,7 +726,8 @@ final class DirectExportPipeline: @unchecked Sendable {
                     screenMotionTrack: screenMotionTrack,
                     cameraMotionTrack: cameraMotionTrack,
                     stickerTrack: stickerTrack,
-                    cameraTimeline: cameraPlan
+                    cameraTimeline: cameraPlan,
+                    includesSubtitles: !emitsSoftSubtitleTrack
                 )
                 let cursorSource = renderPlan.scene.cursor.flatMap {
                     cursorSources[$0.assetID]
@@ -676,7 +794,17 @@ final class DirectExportPipeline: @unchecked Sendable {
         }
 
         if frameIndex >= totalFrames {
-            finishVideo(error: nil)
+            // Normally the caption track was already closed the moment its last
+            // sample went in; this only catches a cue the writer was still
+            // digesting, and it is the last chance to place it at all.
+            switch drainSubtitles(blocking: true) {
+            case .done:
+                finishVideo(error: nil)
+            case .blocked:
+                finishVideo(error: VideoExporterError.exportFailed("字幕轨长时间未就绪，导出中止"))
+            case .failed(let error):
+                finishVideo(error: error)
+            }
         }
     }
 
@@ -799,6 +927,11 @@ final class DirectExportPipeline: @unchecked Sendable {
         completionLock.unlock()
         if let error { requestStop(error: error) }
         videoInput.markAsFinished()
+        // Usually already closed the moment the last caption went in. Closing
+        // unconditionally here covers the exports that end before any cue is
+        // written; on a cancelled export it is harmless, the writer is going
+        // away. The guard inside keeps the track from being closed twice.
+        closeSubtitleTrack()
         if shouldLeave { group.leave() }
     }
 

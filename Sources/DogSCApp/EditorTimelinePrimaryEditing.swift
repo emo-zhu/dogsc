@@ -807,7 +807,7 @@ var primarySegmentJunctions: [EditorTimelineSegmentJunction] {
 
     func prepareEmptyTimelineClick() {
         switch editorStore.selection {
-        case .primarySegment, .zoom, .screenMotion, .cameraMotion, .mosaic, .sticker:
+        case .primarySegment, .zoom, .screenMotion, .cameraMotion, .mosaic, .sticker, .subtitleCue:
             emptyClickClearsSelection = true
         default:
             emptyClickClearsSelection = !selectedPrimarySegmentIDs.isEmpty || selectedCameraSyncAnchorID != nil

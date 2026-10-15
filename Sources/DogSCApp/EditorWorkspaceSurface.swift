@@ -216,6 +216,7 @@ extension InspectorTab {
         case .cursor: .cursorMotion
         case .camera: .camera
         case .audio: .speaker
+        case .subtitle: .subtitle
         }
     }
 }

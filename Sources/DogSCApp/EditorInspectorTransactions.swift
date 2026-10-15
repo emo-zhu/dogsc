@@ -485,6 +485,23 @@ func editorCursorBinding<Value>(
 }
 
 @MainActor
+func editorSubtitleBinding<Value>(
+    store: EditorStore,
+    keyPath: WritableKeyPath<SubtitleStyle, Value>,
+    actionName: String,
+    onError: @escaping (String) -> Void
+) -> Binding<Value> {
+    editorDomainBinding(
+        store: store,
+        commandScope: .subtitle,
+        get: { $0.subtitleStyle[keyPath: keyPath] },
+        set: { $0.subtitleStyle[keyPath: keyPath] = $1 },
+        replace: { try store.replaceSubtitleStyle(with: $0.subtitleStyle, actionName: actionName) },
+        onError: onError
+    )
+}
+
+@MainActor
 func editorMotionBinding<Value>(
     store: EditorStore,
     keyPath: WritableKeyPath<MotionStyle, Value>,

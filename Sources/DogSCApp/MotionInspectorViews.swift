@@ -776,6 +776,23 @@ enum MotionInspectorLogic {
         return String(format: "%02d:%05.2f", Int(safe) / 60, safe.truncatingRemainder(dividingBy: 60))
     }
 
+    /// Inverse of ``timecode(_:)``. Accepts the displayed "mm:ss.xx", an
+    /// "hh:mm:ss.xx", a bare second value, or a colon-free decimal so a typed
+    /// edit never has to match the formatting exactly.
+    static func seconds(fromTimecode text: String) -> TimeInterval? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let components = trimmed.split(separator: ":")
+        guard (1...3).contains(components.count) else { return nil }
+        var total: TimeInterval = 0
+        for component in components {
+            let normalized = component.replacingOccurrences(of: ",", with: ".")
+            guard let value = Double(normalized), value.isFinite, value >= 0 else { return nil }
+            total = total * 60 + value
+        }
+        return total
+    }
+
     private static func maximumDuration<Element>(
         after clipID: UUID,
         clips: [Element],

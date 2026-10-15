@@ -25,6 +25,7 @@ private enum EditorInspectorSelectionKind: Hashable {
     case audio
     case mosaic
     case sticker
+    case subtitleCue
 }
 
 private enum EditorInspectorScrollContext: Hashable {
@@ -133,6 +134,7 @@ struct EditorInspectorView: View {
         case .cursor: ("光标", "全片")
         case .camera: ("摄像头", "全片基础布局")
         case .audio: ("声音", "全片")
+        case .subtitle: ("字幕", "全片")
         }
     }
 
@@ -332,6 +334,12 @@ struct EditorInspectorView: View {
            editorStore.selection == .canvas || editorStore.selection == nil {
             return ("开场", "全片")
         }
+        // The subtitle page spans the whole timeline and owns no object
+        // selection of its own: it must not fall through to whatever was
+        // selected under the previous task.
+        if selectedInspector == .subtitle {
+            return ("字幕", "全片")
+        }
         switch editorStore.selection {
         case .canvas:
             return ("画面", "全片")
@@ -362,6 +370,8 @@ struct EditorInspectorView: View {
             return (style.map { $0 == .spotlight ? "突出" : "柔化" } ?? "区域效果", "选中区域")
         case .sticker:
             return ("贴图", "选中图片")
+        case .subtitleCue:
+            return ("字幕", "全片")
         case nil:
             return (selectedInspector.localizedLabel, nil)
         }
@@ -407,6 +417,7 @@ struct EditorInspectorView: View {
         case .audio: .audio
         case .mosaic: .mosaic
         case .sticker: .sticker
+        case .subtitleCue: .subtitleCue
         }
         return .selection(kind)
     }
@@ -438,6 +449,13 @@ struct EditorInspectorView: View {
             cameraInspector
         case .audio:
             audioInspector
+        case .subtitle:
+            EditorSubtitleInspector(
+                editorStore: editorStore,
+                mediaSession: mediaSession,
+                playbackController: playbackController,
+                onError: onError
+            )
             }
         }
     }

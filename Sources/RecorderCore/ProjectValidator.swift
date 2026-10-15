@@ -16,6 +16,7 @@ public enum ProjectValidationError: Error, Equatable, Sendable {
     case duplicateZoomID(UUID)
     case overlappingZoom(UUID, UUID)
     case invalidTimeline(reason: String)
+    case invalidSubtitle(reason: String)
 }
 
 extension ProjectValidationError: LocalizedError {
@@ -41,6 +42,8 @@ extension ProjectValidationError: LocalizedError {
             return "缩放片段的生效区间发生重叠。"
         case let .invalidTimeline(reason):
             return "时间线无效：\(reason)"
+        case let .invalidSubtitle(reason):
+            return "字幕参数无效：\(reason)"
         }
     }
 }
@@ -103,6 +106,20 @@ public enum ProjectValidator {
         else {
             throw ProjectValidationError.invalidAudio(
                 reason: "音量必须位于 0 到 1。"
+            )
+        }
+    }
+
+    public static func validate(_ style: SubtitleStyle) throws {
+        guard finite(style.fontScale, in: 0.5...2.5),
+              finite(style.backdropOpacity, in: 0...1),
+              finite(style.baselineInset, in: 0.02...0.25),
+              finite(style.maxWidthFraction, in: 0.3...0.95),
+              finite(style.strokeWidth, in: 0...0.2),
+              finite(style.shadowOpacity, in: 0...1)
+        else {
+            throw ProjectValidationError.invalidSubtitle(
+                reason: "字号、遮罩或位置超出支持范围。"
             )
         }
     }
@@ -182,6 +199,7 @@ public enum ProjectValidator {
         try validate(project.audio)
         try validate(project.cursorStyle)
         try validate(project.motion)
+        try validate(project.subtitleStyle)
         guard finite(project.openingSequence.duration, in: 0.4...8),
               finite(project.openingSequence.stagger, in: 0...1.2),
               project.openingSequence.stagger

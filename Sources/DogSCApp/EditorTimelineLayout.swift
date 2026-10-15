@@ -44,6 +44,7 @@ extension EditorTimelineView {
         case screenMotion
         case cameraMotion
         case overlays
+        case subtitles
     }
 
     var focusedTimelineLane: TimelineLaneFocus? {
@@ -59,6 +60,8 @@ extension EditorTimelineView {
             return .cameraMotion
         case .mosaic, .sticker:
             return .overlays
+        case .subtitleCue:
+            return .subtitles
         default:
             return nil
         }
@@ -420,6 +423,14 @@ extension EditorTimelineView {
                     track: .overlays
                 )
             }
+            if showsSubtitleTimeline {
+                optionalTimelineLabel(
+                    "字幕",
+                    tint: EditorConsole.opening.stroke,
+                    height: subtitleTimelineHeight,
+                    track: .subtitles
+                )
+            }
         }
         .background(Color.clear)
     }
@@ -490,6 +501,11 @@ extension EditorTimelineView {
                 }
                 if showsOverlayTimeline {
                     combinedOverlayTimeline(width: width, duration: duration)
+                        .editorTimelineEdits()
+                        .transition(.timelineLane)
+                }
+                if showsSubtitleTimeline {
+                    combinedSubtitleTimeline(width: width, duration: duration)
                         .editorTimelineEdits()
                         .transition(.timelineLane)
                 }

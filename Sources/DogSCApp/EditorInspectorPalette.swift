@@ -61,6 +61,7 @@ enum EditorConsole {
     static let cursor = vivid(fill: 0xB5E655, lightStroke: 0x578C00, ink: 0x283A00, lightText: 0x4A7A00)
     static let camera = vivid(fill: 0xFF6B92, lightStroke: 0xDC2C5C, ink: 0x4D0A24, lightText: 0xC8264F)
     static let audio = vivid(fill: 0x3DDBB0, lightStroke: 0x008F68, ink: 0x003F2E, lightText: 0x007A5A)
+    static let subtitle = vivid(fill: 0x8F7CF6, lightStroke: 0x5B3FD6, ink: 0x241356, lightText: 0x6D4FE0)
 
     static func palette(for tab: InspectorTab) -> EditorConsolePalette {
         switch tab {
@@ -70,6 +71,7 @@ enum EditorConsole {
         case .cursor: cursor
         case .camera: camera
         case .audio: audio
+        case .subtitle: subtitle
         }
     }
 
@@ -83,6 +85,7 @@ enum EditorConsole {
         case .camera, .cameraMotion: camera
         case .audio: audio
         case .mosaic, .sticker: opening
+        case .subtitleCue: subtitle
         }
     }
 }

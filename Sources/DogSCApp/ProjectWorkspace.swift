@@ -55,7 +55,11 @@ final class ProjectWorkspace: ObservableObject, RecordingSessionWorkspacePort {
 
     convenience init() {
         self.init(
-            document: ProjectDocument(project: RecorderProject()),
+            document: ProjectDocument(
+                project: RecorderProject(
+                    subtitleStyle: AppPreferences.defaultSubtitleStyle
+                )
+            ),
             persistence: ProjectSessionPersistenceController()
         )
     }
@@ -69,7 +73,11 @@ final class ProjectWorkspace: ObservableObject, RecordingSessionWorkspacePort {
 
     convenience init(persistence: ProjectSessionPersistenceController) {
         self.init(
-            document: ProjectDocument(project: RecorderProject()),
+            document: ProjectDocument(
+                project: RecorderProject(
+                    subtitleStyle: AppPreferences.defaultSubtitleStyle
+                )
+            ),
             persistence: persistence
         )
     }

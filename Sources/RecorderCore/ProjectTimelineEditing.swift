@@ -12,6 +12,7 @@ public enum ProjectTimelineTrack: String, Equatable, Sendable {
     case cameraMotion
     case mosaic
     case sticker
+    case subtitle
 }
 
 public enum ProjectTimelineEditingError: Error, Equatable, Sendable {
@@ -90,6 +91,7 @@ private extension ProjectTimelineTrack {
         case .cameraMotion: "摄像运动"
         case .mosaic: "打码"
         case .sticker: "贴图"
+        case .subtitle: "字幕"
         }
     }
 }
@@ -352,6 +354,9 @@ public enum ProjectTimelineEditing {
                 result.stickerClips = timeline.stickerClips.map {
                     inserting($0, at: resolved.outputStart, duration: outputAmount)
                 }
+                result.subtitleCues = timeline.subtitleCues.map {
+                    inserting($0, at: resolved.outputStart, duration: outputAmount)
+                }
                 sortZoom(&result.zoomClips)
                 sortScreenMotion(&result.screenMotionClips)
                 sortCameraMotion(&result.cameraMotionClips)
@@ -402,6 +407,9 @@ public enum ProjectTimelineEditing {
                     inserting($0, at: resolved.outputEnd, duration: outputAmount)
                 }
                 result.stickerClips = timeline.stickerClips.map {
+                    inserting($0, at: resolved.outputEnd, duration: outputAmount)
+                }
+                result.subtitleCues = timeline.subtitleCues.map {
                     inserting($0, at: resolved.outputEnd, duration: outputAmount)
                 }
                 sortZoom(&result.zoomClips)
@@ -522,6 +530,12 @@ public enum ProjectTimelineEditing {
             newStarts: newStarts,
             outputDuration: newMap.outputDuration
         )
+        result.subtitleCues = remappedSubtitleCues(
+            timeline.subtitleCues,
+            oldMap: oldMap,
+            newStarts: newStarts,
+            outputDuration: newMap.outputDuration
+        )
         try validate(result, fullSourceDuration: fullSourceDuration)
         return result
     }
@@ -594,6 +608,9 @@ public enum ProjectTimelineEditing {
         result.stickerClips = timeline.stickerClips.map {
             inserting($0, at: insertionTime, duration: restoredDuration)
         }
+        result.subtitleCues = timeline.subtitleCues.map {
+            inserting($0, at: insertionTime, duration: restoredDuration)
+        }
         sortZoom(&result.zoomClips)
         sortScreenMotion(&result.screenMotionClips)
         sortCameraMotion(&result.cameraMotionClips)
@@ -650,6 +667,9 @@ public enum ProjectTimelineEditing {
             inserting($0, at: 0, duration: restoredDuration)
         }
         result.stickerClips = timeline.stickerClips.map {
+            inserting($0, at: 0, duration: restoredDuration)
+        }
+        result.subtitleCues = timeline.subtitleCues.map {
             inserting($0, at: 0, duration: restoredDuration)
         }
         sortZoom(&result.zoomClips)
@@ -920,6 +940,7 @@ public enum ProjectTimelineEditing {
         try validateCameraMotionClips(timeline.cameraMotionClips)
         try validateMosaicClips(timeline.mosaicClips)
         try validateStickerClips(timeline.stickerClips)
+        try validateSubtitleCues(timeline.subtitleCues)
     }
 
     public static func validate(

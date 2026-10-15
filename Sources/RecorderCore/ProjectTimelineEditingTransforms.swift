@@ -30,6 +30,9 @@ extension ProjectTimelineEditing {
         result.stickerClips = timeline.stickerClips.compactMap {
             ripple($0, deleting: deletion, deletesOutputTail: deletesOutputTail)
         }
+        result.subtitleCues = timeline.subtitleCues.compactMap {
+            ripple($0, deleting: deletion, deletesOutputTail: deletesOutputTail)
+        }
         sortZoom(&result.zoomClips)
         sortScreenMotion(&result.screenMotionClips)
         sortCameraMotion(&result.cameraMotionClips)
@@ -168,6 +171,16 @@ extension ProjectTimelineEditing {
         return edited
     }
 
+    static func inserting(
+        _ cue: SubtitleCue,
+        at insertionTime: TimeInterval,
+        duration: TimeInterval
+    ) -> SubtitleCue {
+        var edited = cue
+        edited.timing = inserting(cue.timing, at: insertionTime, duration: duration)
+        return edited
+    }
+
     static func ripple(
         _ timing: OverlayTiming,
         deleting deletion: OutputDeletion,
@@ -226,6 +239,21 @@ extension ProjectTimelineEditing {
         edited.timing = timing
         // Keep the authored entry/exit ratio. FrameScene fits both windows to
         // a short clip together; editing media must not overwrite that intent.
+        return edited
+    }
+
+    static func ripple(
+        _ cue: SubtitleCue,
+        deleting deletion: OutputDeletion,
+        deletesOutputTail: Bool
+    ) -> SubtitleCue? {
+        guard let timing = ripple(
+            cue.timing,
+            deleting: deletion,
+            deletesOutputTail: deletesOutputTail
+        ) else { return nil }
+        var edited = cue
+        edited.timing = timing
         return edited
     }
 
@@ -765,6 +793,35 @@ extension ProjectTimelineEditing {
         }
     }
 
+    static func remappedSubtitleCues(
+        _ cues: [SubtitleCue],
+        oldMap: TimelineMap,
+        newStarts: [UUID: TimeInterval],
+        outputDuration: TimeInterval
+    ) -> [SubtitleCue] {
+        cues.compactMap { cue in
+            let delta = reorderedOutputOffset(
+                at: cue.timing.startTime,
+                oldMap: oldMap,
+                newStarts: newStarts
+            )
+            var moved = cue
+            moved.timing.startTime = min(
+                max(cue.timing.startTime + delta, 0),
+                outputDuration
+            )
+            moved.timing.duration = min(
+                cue.timing.duration,
+                max(outputDuration - moved.timing.startTime, 0)
+            )
+            return moved.timing.duration > epsilon ? moved : nil
+        }.sorted {
+            $0.timing.startTime == $1.timing.startTime
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.timing.startTime < $1.timing.startTime
+        }
+    }
+
     static func normalizedScreenMotionSequence(
         _ clips: [ScreenMotionClip]
     ) -> [ScreenMotionClip] {
@@ -1067,6 +1124,19 @@ extension ProjectTimelineEditing {
                   clip.backdropBlur.isFinite,
                   (0...96).contains(clip.backdropBlur) else {
                 throw ProjectTimelineEditingError.invalidClip(track: .sticker, id: clip.id)
+            }
+        }
+    }
+
+    static func validateSubtitleCues(_ cues: [SubtitleCue]) throws {
+        var identifiers = Set<UUID>()
+        for cue in cues {
+            guard identifiers.insert(cue.id).inserted else {
+                throw ProjectTimelineEditingError.duplicateClipID(track: .subtitle, id: cue.id)
+            }
+            guard valid(cue.timing),
+                  cue.text.utf8.count <= 2_000 else {
+                throw ProjectTimelineEditingError.invalidClip(track: .subtitle, id: cue.id)
             }
         }
     }

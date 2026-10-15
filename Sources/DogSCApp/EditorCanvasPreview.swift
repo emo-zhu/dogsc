@@ -663,6 +663,7 @@ struct CanvasPreview: View {
         cropProject.timeline.cameraMotionClips = []
         cropProject.timeline.mosaicClips = []
         cropProject.timeline.stickerClips = []
+        cropProject.timeline.subtitleCues = []
         cropProject.openingSequence.isEnabled = false
         cropProject.camera.isHidden = true
         cropProject.cursorStyle.assetID = .hidden

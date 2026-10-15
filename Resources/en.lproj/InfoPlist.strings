@@ -2,3 +2,4 @@
 "CFBundleTypeName" = "DogSC Project";
 "NSCameraUsageDescription" = "Add camera video to screen recordings, including connected Continuity Cameras.";
 "NSMicrophoneUsageDescription" = "Record microphone audio with screen recordings.";
+"NSSpeechRecognitionUsageDescription" = "Transcribe speech in recordings into captions on this device.";

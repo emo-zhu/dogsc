@@ -168,6 +168,7 @@ extension EditorTimelineView {
         if visibleTracks.contains(.screenMotion) { count += 1 }
         if visibleTracks.contains(.cameraMotion) { count += 1 }
         if !visibleTracks.intersection(.overlays).isEmpty { count += 1 }
+        if visibleTracks.contains(.subtitles) { count += 1 }
         return count
     }
 
@@ -186,7 +187,7 @@ extension EditorTimelineView {
                         .foregroundStyle(EditorTheme.secondaryText)
                 }
                 Spacer(minLength: 8)
-                Text("\(visibleOptionalTrackCount) / 4")
+                Text("\(visibleOptionalTrackCount) / 5")
                     .font(.appUI(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(EditorTheme.secondaryText)
                     .contentTransition(.numericText())
@@ -217,6 +218,10 @@ extension EditorTimelineView {
                     "叠加", symbol: "square.on.square", palette: EditorConsole.opening, track: .overlays,
                     clipCount: editorStore.previewProject.timeline.mosaicClips.count
                         + editorStore.previewProject.timeline.stickerClips.count
+                )
+                timelineTrackVisibilityRow(
+                    "字幕", symbol: "captions.bubble", palette: EditorConsole.opening, track: .subtitles,
+                    clipCount: editorStore.previewProject.timeline.subtitleCues.count
                 )
             }
             .padding(6)
@@ -295,6 +300,7 @@ extension EditorTimelineView {
         case .screenMotion: "cube.transparent"
         case .cameraMotion: "video"
         case .overlays: "square.3.layers.3d"
+        case .subtitles: "captions.bubble"
         default: "square.stack"
         }
         return EditorTimelineLaneLabel(title: title, symbol: symbol, tint: tint, onHide: {

@@ -1021,6 +1021,7 @@ extension EditorInspectorView {
         case .audio: return .audio
         case .cursor: return .cursor
         case .zoom: return .selection
+        case .subtitle: return .subtitle
         }
     }
 

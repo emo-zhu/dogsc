@@ -304,7 +304,8 @@ extension AppModel {
         let nextRecordingBaseline = RecorderProject(
             capture: configuration,
             audio: previousAudio,
-            exportSettings: previousExportSettings
+            exportSettings: previousExportSettings,
+            subtitleStyle: AppPreferences.defaultSubtitleStyle
         )
         // An explicit scene default includes crop. Implicit last-used styling
         // remains source-safe, matching the cold-launch choice.

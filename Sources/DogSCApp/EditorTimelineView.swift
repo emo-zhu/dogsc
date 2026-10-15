@@ -1051,6 +1051,10 @@ struct EditorTimelineView: View {
         !visibleTracks.intersection(.overlays).isEmpty
     }
 
+    var showsSubtitleTimeline: Bool {
+        visibleTracks.contains(.subtitles)
+    }
+
     var showsSystemWaveform: Bool {
         mediaSession.inventories.source.hasAudio
     }
@@ -1213,6 +1217,9 @@ struct EditorTimelineView: View {
             case let .sticker(id)
                 where !editorStore.project.timeline.stickerClips.contains(where: { $0.id == id }):
                 editorStore.selection = .canvas
+            case let .subtitleCue(id)
+                where !editorStore.project.timeline.subtitleCues.contains(where: { $0.id == id }):
+                editorStore.selection = .canvas
             default:
                 break
             }
@@ -1344,6 +1351,9 @@ extension EditorTimelineView {
             EditorOverviewMarker(start: $0.timing.startTime / length, end: $0.timing.endTime / length, color: camera)
         }
         markers += overlayTimelineClips.map {
+            EditorOverviewMarker(start: $0.timing.startTime / length, end: $0.timing.endTime / length, color: overlay)
+        }
+        markers += subtitleTimelineClips.map {
             EditorOverviewMarker(start: $0.timing.startTime / length, end: $0.timing.endTime / length, color: overlay)
         }
         return markers

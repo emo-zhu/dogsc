@@ -164,6 +164,7 @@ public struct RecorderProject: Codable, Equatable, Sendable {
     public var timeline: ProjectTimeline
     public var media: ProjectMediaManifest?
     public var recordingMarkers: [RecordingMarker]
+    public var subtitleStyle: SubtitleStyle
 
     /// Source-compatibility bridge while app call sites migrate to
     /// `timeline.zoomClips`. This is not a second persisted field.
@@ -187,7 +188,8 @@ public struct RecorderProject: Codable, Equatable, Sendable {
         zoomAnimations: [ZoomAnimationClip] = [],
         timeline: ProjectTimeline? = nil,
         media: ProjectMediaManifest? = nil,
-        recordingMarkers: [RecordingMarker] = []
+        recordingMarkers: [RecordingMarker] = [],
+        subtitleStyle: SubtitleStyle = SubtitleStyle()
     ) {
         self.version = version
         self.title = title
@@ -203,6 +205,7 @@ public struct RecorderProject: Codable, Equatable, Sendable {
         self.timeline = timeline ?? ProjectTimeline(zoomClips: zoomAnimations)
         self.media = media
         self.recordingMarkers = recordingMarkers
+        self.subtitleStyle = subtitleStyle
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -222,6 +225,7 @@ public struct RecorderProject: Codable, Equatable, Sendable {
         case zoomAnimations
         case media
         case recordingMarkers
+        case subtitleStyle
         // v1/v2 decode-only fields.
         case screenRecordingRelativePath
         case cameraRecordingRelativePath
@@ -268,6 +272,10 @@ public struct RecorderProject: Codable, Equatable, Sendable {
             forKey: .openingSequence
         ) ?? OpeningSequence()
         cursorStyle = try container.decodeIfPresent(CursorStyle.self, forKey: .cursorStyle) ?? CursorStyle()
+        subtitleStyle = try container.decodeIfPresent(
+            SubtitleStyle.self,
+            forKey: .subtitleStyle
+        ) ?? SubtitleStyle()
         if decodedVersion >= 5 {
             var decodedSettings = try container.decode(
                 ExportSettings.self,
@@ -394,6 +402,7 @@ public struct RecorderProject: Codable, Equatable, Sendable {
         try container.encode(timeline, forKey: .timeline)
         try container.encodeIfPresent(media, forKey: .media)
         try container.encode(recordingMarkers, forKey: .recordingMarkers)
+        try container.encode(subtitleStyle, forKey: .subtitleStyle)
     }
 
 }

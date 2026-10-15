@@ -636,11 +636,13 @@ struct EditorMotionPartnerOrigin: Equatable {
 enum EditorOverlayTimelineKind: Equatable {
     case mosaic
     case sticker
+    case subtitle
 
     func selection(id: UUID) -> EditorSelection {
         switch self {
         case .mosaic: return .mosaic(id)
         case .sticker: return .sticker(id)
+        case .subtitle: return .subtitleCue(id)
         }
     }
 
@@ -648,6 +650,7 @@ enum EditorOverlayTimelineKind: Equatable {
         switch self {
         case .mosaic: return "移动打码"
         case .sticker: return "移动贴图"
+        case .subtitle: return "移动字幕"
         }
     }
 
@@ -655,6 +658,7 @@ enum EditorOverlayTimelineKind: Equatable {
         switch self {
         case .mosaic: return "调整打码时长"
         case .sticker: return "调整贴图时长"
+        case .subtitle: return "调整字幕时长"
         }
     }
 }
@@ -703,6 +707,7 @@ enum EditorTimelineDeleteTarget: Equatable {
     case zoom(UUID)
     case mosaic(UUID)
     case sticker(UUID)
+    case subtitleCue(UUID)
 
     init?(selection: EditorSelection?) {
         switch selection {
@@ -712,6 +717,7 @@ enum EditorTimelineDeleteTarget: Equatable {
         case let .zoom(id): self = .zoom(id)
         case let .mosaic(id): self = .mosaic(id)
         case let .sticker(id): self = .sticker(id)
+        case let .subtitleCue(id): self = .subtitleCue(id)
         default: return nil
         }
     }
@@ -783,6 +789,12 @@ enum EditorTimelineSelectionReveal {
             }
         case let .sticker(id):
             interval = project.timeline.stickerClips.first(where: { $0.id == id }).map {
+                (start: $0.timing.startTime,
+                 end: $0.timing.endTime,
+                 preferred: $0.timing.startTime)
+            }
+        case let .subtitleCue(id):
+            interval = project.timeline.subtitleCues.first(where: { $0.id == id }).map {
                 (start: $0.timing.startTime,
                  end: $0.timing.endTime,
                  preferred: $0.timing.startTime)

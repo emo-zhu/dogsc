@@ -43,6 +43,8 @@ func appErrorDescription(_ error: any Error) -> String {
             return String(format: appLocalized("缩放片段无效：%@"), appLocalized(reason))
         case let .invalidTimeline(reason):
             return String(format: appLocalized("时间线无效：%@"), appLocalized(reason))
+        case let .invalidSubtitle(reason):
+            return String(format: appLocalized("字幕参数无效：%@"), appLocalized(reason))
         case .duplicateZoomID, .overlappingZoom:
             return appLocalized(validation.localizedDescription)
         }
@@ -74,6 +76,7 @@ private func appTimelineTrackName(_ track: ProjectTimelineTrack) -> String {
     case .cameraMotion: appLocalized("摄像运动")
     case .mosaic: appLocalized("打码")
     case .sticker: appLocalized("贴图")
+    case .subtitle: appLocalized("字幕")
     }
 }
 
@@ -295,6 +298,10 @@ struct EditorTimelineTrackVisibility: OptionSet, Equatable, Sendable {
     static let cameraMotion = Self(rawValue: 1 << 2)
     static let mosaic = Self(rawValue: 1 << 3)
     static let sticker = Self(rawValue: 1 << 4)
+    // Captions keep their own bit so hiding the effect lanes never hides the
+    // caption track. Persisted values written before this bit exist decode
+    // without it (lane hidden); transcription/import turns the lane back on.
+    static let subtitles = Self(rawValue: 1 << 5)
     static let overlays = Self(rawValue: mosaic.rawValue | sticker.rawValue)
 
     static func initial(for _: RecorderProject) -> Self {
@@ -339,6 +346,24 @@ enum AppPreferences {
         "editor.sticker.last-used-creation-defaults.v1"
     private static let zoomCreationScaleKey =
         "editor.zoom.last-used-creation-scale.v1"
+    static let subtitleTranscriptionLanguageKey =
+        "editor.subtitle.transcription-language.v1"
+    private static let subtitleDefaultStyleKey =
+        "editor.subtitle.default-style.v1"
+
+    /// The caption style applied to newly created projects. Stored as JSON so
+    /// SubtitleStyle's optional-field decoding absorbs schema evolution.
+    static func rememberDefaultSubtitleStyle(_ style: SubtitleStyle) {
+        guard let data = try? JSONEncoder().encode(style) else { return }
+        UserDefaults.standard.set(data, forKey: subtitleDefaultStyleKey)
+    }
+
+    static var defaultSubtitleStyle: SubtitleStyle {
+        guard let data = UserDefaults.standard.data(forKey: subtitleDefaultStyleKey),
+              let decoded = try? JSONDecoder().decode(SubtitleStyle.self, from: data)
+        else { return SubtitleStyle() }
+        return decoded
+    }
 
     static var applicationLanguageOverride: [String]? {
         guard let identifier = Bundle.main.bundleIdentifier else { return nil }
